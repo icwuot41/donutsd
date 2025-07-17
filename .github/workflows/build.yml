@@ -1,0 +1,85 @@
+name: Build Donut
+
+on:
+  push:
+    branches:
+      - master
+  pull_request:
+    branches:
+      - master
+    types: [ closed ]
+
+permissions:
+  contents: write
+  pull-requests: write
+  repository-projects: write
+
+jobs:
+  build:
+    runs-on: windows-latest
+    if: github.event_name == 'push' || (github.event_name == 'pull_request' && github.event.pull_request.merged == true)
+    strategy:
+      matrix:
+        configuration: [Release]
+
+    steps:
+    - name: Check out repository
+      uses: actions/checkout@v4
+
+    - name: Install 7-Zip
+      shell: powershell
+      run: |
+        choco install 7zip -y
+
+    - name: Download clang-cl
+      shell: powershell
+      run: |
+        Invoke-WebRequest -Uri "https://github.com/wwh1004/ollvm-16/releases/download/llvm-16.0.6/clang-cl.7z" -OutFile "clang-cl.7z"
+
+    - name: Unzip clang-cl
+      shell: cmd
+      run: |
+        7z x clang-cl.7z -o.\ -y
+        dir .\clang-cl.exe
+
+    - name: Configure MSVC and Build
+      shell: cmd
+      run: |
+        call "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Auxiliary\Build\vcvars64.bat"
+        cl -nologo loader\exe2h\exe2h.c loader\exe2h\mmap-windows.c
+        .\clang-cl.exe --target=x86_64-w64-windows-msvc /w /DNDEBUG /MT -mllvm -fla -DBYPASS_AMSI_C -DBYPASS_WLDP_A -DBYPASS_ETW_B -Zp8 -c -nologo -Gy -Os -Ob1 -GR- -EHa -Oi -GS- -Gs2147483647 -I include loader\loader.c hash.c encrypt.c loader\depack.c
+        link -nologo -order:@loader\order.txt -entry:DonutLoader -fixed -subsystem:console -nodefaultlib loader.obj hash.obj encrypt.obj depack.obj
+        .\exe2h.exe .\loader.exe
+        rc include/donut.rc
+        .\clang-cl.exe --target=x86_64-w64-windows-msvc -Os /DNDEBUG /MT -Zp8 -nologo -DDONUT_EXE -I include donut.c hash.c encrypt.c format.c loader\clib.c lib\aplib64.lib include/donut.res
+
+    - name: List build directory
+      shell: cmd
+      run: dir
+
+    - name: Delete existing tag and release
+      uses: dev-drprasad/delete-tag-and-release@v1.1
+      with:
+        tag_name: DonutBuild
+        delete_release: true
+        github_token: ${{ secrets.GITHUB_TOKEN }}
+
+    - name: Create Release
+      id: create_release
+      uses: actions/create-release@v1
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      with:
+        tag_name: DonutBuild
+        release_name: DonutBuild
+        body: "Release created by GitHub Actions"
+
+    - name: Upload Release Asset
+      uses: actions/upload-release-asset@v1
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      with:
+        upload_url: ${{ steps.create_release.outputs.upload_url }}
+        asset_path: donut.exe
+        asset_name: donut.exe
+        asset_content_type: application/octet-stream
